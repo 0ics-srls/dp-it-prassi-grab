@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import ssl
+from pathlib import Path
 
 import certifi
 import httpx
 
 from dp_it_prassi_grab.errors import CONFIG_ERROR, TRANSIENT_ERROR, GrabError
+
+# def.finanze.it sends only its leaf; the Sectigo intermediate is pinned here (certs/README.md has source and fingerprint, P79b-2 / P80-20)
+PINNED_CERTS: tuple[Path, ...] = (Path(__file__).resolve().parent / "certs" / "sectigo-public-server-authentication-ca-ov-r36.pem",)
 
 # the Agenzia delle Entrate portal and MEF DocTrib (interpelli)
 DEFAULT_ALLOWED_HOSTS: tuple[str, ...] = ("www.agenziaentrate.gov.it", "def.finanze.it")
@@ -16,11 +20,14 @@ DEFAULT_HEADERS = {"User-Agent": USER_AGENT, "Accept": "*/*", "Accept-Language":
 
 
 def ssl_context(*, verify_tls: bool) -> ssl.SSLContext:
-    """certifi roots; ``verify_tls=False`` gives a context that does not verify (the documented escape for replay servers)."""
+    """certifi roots plus the pinned intermediates; ``verify_tls=False`` gives a context that does not verify (the documented escape)."""
     context = ssl.create_default_context(cafile=certifi.where())
     if not verify_tls:
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        return context
+    for pinned in PINNED_CERTS:
+        context.load_verify_locations(cafile=str(pinned))
     return context
 
 
