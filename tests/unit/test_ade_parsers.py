@@ -237,3 +237,36 @@ def test_should_prefer_the_provvedimento_link_text_skip_allegati_and_fall_back_t
 def test_should_name_the_download_by_the_pdf_segment_and_not_by_the_guid() -> None:
     assert ade.file_name_of(f"{PDF_BASE}/20143/1/Provvedimento+del+3+ottobre.pdf/49729f04-b1d7?t=1") == "Provvedimento del 3 ottobre.pdf"
     assert ade.file_name_of("https://www.agenziaentrate.gov.it/portale/documents/20143/1/noname") is None
+
+
+# ---- F3: a replay server stands in for the portal ----
+REPLAY_PDF_BASE = "http://replay.test:8765/portale/documents"
+
+
+@pytest.mark.unit
+def test_should_take_the_pdf_of_a_card_whose_link_is_on_a_replay_host() -> None:
+    page = _card("Risoluzione n. 118 del 17 febbraio 2022", f"{REPLAY_PDF_BASE}/1/2/Risoluzione_n_118_2022.pdf/8c3d1f2e-0000-4000-8000-000000000001?t=1")
+
+    parsed = ade.parse_monthly(page, "risoluzioni", 2022)
+
+    assert [(d.numero, d.file_name) for d in parsed.docs] == [(118, "Risoluzione_n_118_2022.pdf")]
+    assert parsed.docs[0].url.startswith("http://replay.test:8765/portale/documents/")
+
+
+@pytest.mark.unit
+def test_should_still_take_the_pdf_of_the_official_host() -> None:
+    page = _card("Risoluzione n. 7 del 4 marzo 2025", f"{PDF_BASE}/1/2/Risoluzione_n_7.pdf/8c3d1f2e-0000-4000-8000-000000000002?t=1")
+
+    parsed = ade.parse_monthly(page, "risoluzioni", 2025)
+
+    assert [d.numero for d in parsed.docs] == [7]
+
+
+@pytest.mark.unit
+def test_should_take_a_provvedimento_link_on_a_replay_host() -> None:
+    page = _prov_card("Provvedimento del 20 ottobre 2025", "fa-file-pdf-o", f"{REPLAY_PDF_BASE}/1/2/Provvedimento_20.pdf")
+
+    entries = ade.parse_provvedimenti(page).entries
+
+    assert [e.is_detail for e in entries] == [False]
+    assert entries[0].link.startswith("http://replay.test:8765/portale/documents/")

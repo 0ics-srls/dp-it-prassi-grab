@@ -2,7 +2,7 @@
   "specVersion": "1.1",
   "type": "stdin",
   "name": "dp-it-prassi-grab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Downloads prassi PDFs into <dir>: Agenzia delle Entrate portal month pages (circolari, risoluzioni, provvedimenti) and MEF DocTrib interpelli. Sidecar files for the convert class.",
   "author": "open-lex-it",
   "authentication": false,

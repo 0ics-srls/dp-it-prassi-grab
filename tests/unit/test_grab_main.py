@@ -154,3 +154,51 @@ def test_should_stop_on_terminate_and_refuse_unknown_actions() -> None:
     assert code == 1
     assert len(lines) == 1
     assert lines[0]["code"] == "config_error"
+
+
+REPLAY_PAGE = (
+    '<div data-analytics-asset-title="Risoluzione n. 118 del 17 febbraio 2022"></div>'
+    '<a href="http://replay.test:8765/portale/documents/1/2/Risoluzione_n_118_2022.pdf/8c3d1f2e-0000-4000-8000-000000000001?t=1">scarica</a>'
+)
+REPLAY_ITEM = {
+    "key": "ade:risoluzioni:2022:02|v1",
+    "meta": {"kind": "ade", "itemId": "ade:risoluzioni:2022:02", "version": "1", "tipologia": "risoluzioni", "anno": 2022, "mese": 2},
+}
+
+
+def replay_run(params: dict[str, Any], tmp_path: Path, seen: list[str]) -> list[dict[str, Any]]:
+    def route(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, content=PDF_BYTES) if ".pdf" in request.url.path else httpx.Response(200, text=REPLAY_PAGE)
+
+    clock = FakeTime()
+    deps = GrabDeps(transport=httpx.MockTransport(route), sleep=clock.sleep, clock=clock.clock)
+    out = io.StringIO()
+    grab_main.main(io.StringIO(request_line({"dir": str(tmp_path / "raw"), "items": [REPLAY_ITEM], **params}) + "\n"), out, deps)
+    return [json.loads(line) for line in out.getvalue().splitlines()]
+
+
+@pytest.mark.unit
+def test_should_download_the_pdf_and_write_the_sidecar_from_a_replay_base_url(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    events = replay_run({"baseUrl": "http://replay.test:8765/portale"}, tmp_path, seen)
+
+    assert events[-1]["type"] == "result", events
+    assert events[-1]["data"]["downloaded"] == 1
+    pdf = next((tmp_path / "raw").rglob("Risoluzione_n_118_2022.pdf"))
+    sidecar = json.loads(Path(str(pdf) + ".meta.json").read_text(encoding="utf-8"))
+    assert (sidecar["numero"], sidecar["data"]) == ("118", "2022-02-17")
+    assert all(url.startswith("http://replay.test:8765/") for url in seen)
+
+
+@pytest.mark.unit
+def test_should_not_fetch_a_pdf_whose_host_is_neither_allowed_nor_the_replay_host(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    events = replay_run({"baseUrl": "http://other.test:9000/portale"}, tmp_path, seen)
+
+    assert events[-1]["type"] == "error"
+    assert events[-1]["code"] == "config_error"
+    assert not any("replay.test" in url for url in seen)
+    assert not list((tmp_path / "raw").rglob("*.pdf"))

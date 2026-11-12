@@ -19,21 +19,23 @@ _MONTHLY_HEADER = re.compile(
     r"^\s*(foglia|titolo|elenco)\b|provvedimenti del direttore|^\s*\w+\s+\d{4}\s+(circolari|risoluzioni|provvedimenti)\s*$", re.IGNORECASE
 )
 _PDF = re.compile(
-    r"https://www\.agenziaentrate\.gov\.it/portale/documents/\d+/\d+/[^\"' )]+?\.pdf(?:/[0-9a-f-]+)?(?:\?[^\"' )]*)?",
+    r"https?://[^/\"' )]+/portale/documents/\d+/\d+/[^\"' )]+?\.pdf(?:/[0-9a-f-]+)?(?:\?[^\"' )]*)?",
     re.IGNORECASE,
 )
 _FILE_NAME = re.compile(r"/([^/]+\.pdf)", re.IGNORECASE)
 _SPACES = re.compile(r"[+_]+")
 _PREFIX = re.compile(r"^(circolare|circ|risoluzione|ris)\.?\s*", re.IGNORECASE)
 _LINK = re.compile(
-    r'href="(?P<link>https://www\.agenziaentrate\.gov\.it/portale/(?:documents/[^"]+?\.pdf(?:/[^"]*)?|-/[^"]+))"',
+    r'href="(?P<link>https?://[^/"]+/portale/(?:documents/[^"]+?\.pdf(?:/[^"]*)?|-/[^"]+))"',
     re.IGNORECASE,
 )
 _DETAIL_PDF = re.compile(r'<a[^>]+href="(?P<href>[^"]*?/documents/[^"]+?\.pdf(?:/[^"]*)?)"[^>]*>(?P<text>[^<]*)', re.IGNORECASE)
 _PROV_HEADER = re.compile(
     r"^\s*(foglia|titolo|elenco)\b|provvedimenti del direttore|^\s*\w+\s+\d{4}\s+provvediment|^\s*provvedimenti\s+\w+\s+\d{4}", re.IGNORECASE
 )
-_DETAIL_BASE = "https://www.agenziaentrate.gov.it/portale/-/"
+# F3: the host is not part of the patterns. A replay server stands in for the portal under the Source baseUrl; the guard against fetching an
+# unexpected host is the allow-list of the HTTP client (allowedHosts plus the baseUrl host), enforced before every request.
+_DETAIL_MARK = "/portale/-/"
 _WINDOW_FALLBACK = 4000
 
 _MESI = {"gennaio": 1, "febbraio": 2, "marzo": 3, "aprile": 4, "maggio": 5, "giugno": 6, "luglio": 7, "agosto": 8, "settembre": 9, "ottobre": 10,
@@ -203,7 +205,7 @@ def parse_provvedimenti(html: str) -> ProvvedimentiParse:
             lost.append(title)
             continue
         url = html_lib.unescape(link.group("link"))
-        is_detail = url.lower().startswith(_DETAIL_BASE) or "fa-folder-o" in window.lower()
+        is_detail = _DETAIL_MARK in url.lower() or "fa-folder-o" in window.lower()
         entries.append(ProvvedimentoEntry(title, url, is_detail, parse_data(title)))
     return ProvvedimentiParse(entries, ParseCount(len(cards), len(entries), intestazioni, senza_pdf), tuple(lost))
 
