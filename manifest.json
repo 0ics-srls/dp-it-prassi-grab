@@ -1,0 +1,47 @@
+{
+  "specVersion": "1.1",
+  "type": "stdin",
+  "name": "dp-it-prassi-grab",
+  "version": "0.1.0",
+  "description": "Downloads prassi PDFs into <dir>: Agenzia delle Entrate portal month pages (circolari, risoluzioni, provvedimenti) and MEF DocTrib interpelli. Sidecar files for the convert class.",
+  "author": "open-lex-it",
+  "authentication": false,
+  "actions": {
+    "execute": {
+      "description": "For each item fetch its source and write atomically (ade: month page PDFs + sidecars; doctrib: search windows, detail pages, PDFs). dryRun: no request.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "description": "the items to download, as reported by the detect step",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": { "type": "string", "minLength": 1 },
+                "meta": {
+                  "type": "object",
+                  "properties": { "kind": { "enum": ["ade", "doctrib"] }, "itemId": { "type": "string" } },
+                  "required": ["kind", "itemId"]
+                }
+              },
+              "required": ["key", "meta"]
+            }
+          },
+          "dir": { "type": "string", "description": "directory to download into" },
+          "dryRun": { "type": "boolean", "description": "plan only: no request, nothing written" }
+        },
+        "required": ["items", "dir"]
+      },
+      "output": {
+        "type": "object",
+        "description": "{ downloaded, skipped_existing, senza_pdf, mancanti, truncated, files: [...] }"
+      }
+    },
+    "terminate": {
+      "description": "Stop and clean up.",
+      "input": { "type": "object", "properties": {} }
+    }
+  },
+  "execution": { "timeout": 7200, "memoryLimit": "512Mi", "cpuLimit": "1.0" }
+}
