@@ -55,6 +55,7 @@ class AdeDoc:
     file_name: str
     numero: int | None
     oggetto: str
+    title: str = ""
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class MonthlyParse:
 
     docs: list[AdeDoc]
     count: ParseCount
+    senza_pdf_titles: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,7 @@ class ProvvedimentiParse:
 
     entries: list[ProvvedimentoEntry]
     count: ParseCount
+    senza_pdf_titles: tuple[str, ...] = ()
 
 
 def _windows(html: str, cards: list[re.Match[str]]) -> list[str]:
@@ -116,6 +119,7 @@ def parse_monthly(html: str, tipo: str, anno: int | None = None) -> MonthlyParse
     seen: set[str] = set()
     intestazioni = 0
     senza_pdf = 0
+    lost: list[str] = []
     for card, window in zip(cards, windows, strict=True):
         title = html_lib.unescape(card.group("title")).strip()
         if _MONTHLY_HEADER.search(title):
@@ -128,6 +132,7 @@ def parse_monthly(html: str, tipo: str, anno: int | None = None) -> MonthlyParse
         pdf = _PDF.search(window)
         if pdf is None:
             senza_pdf += 1
+            lost.append(title)
             continue
         url = html_lib.unescape(pdf.group(0))
         if url in seen:
@@ -138,8 +143,8 @@ def parse_monthly(html: str, tipo: str, anno: int | None = None) -> MonthlyParse
         raw_name = named.group(1) if named else f"{tipo}_{anno}_{numero if numero is not None else 'sn'}.pdf"
         file_name = unquote_plus(raw_name)
         slug = _SPACES.sub(" ", unquote_plus(raw_name[: -len(".pdf")])).strip()
-        docs.append(AdeDoc(url, file_name, numero, _PREFIX.sub("", slug).strip()))
-    return MonthlyParse(docs, ParseCount(len(cards), len(docs), intestazioni, senza_pdf))
+        docs.append(AdeDoc(url, file_name, numero, _PREFIX.sub("", slug).strip(), title))
+    return MonthlyParse(docs, ParseCount(len(cards), len(docs), intestazioni, senza_pdf), tuple(lost))
 
 
 def is_header(title: str) -> bool:
@@ -186,6 +191,7 @@ def parse_provvedimenti(html: str) -> ProvvedimentiParse:
     entries: list[ProvvedimentoEntry] = []
     intestazioni = 0
     senza_pdf = 0
+    lost: list[str] = []
     for card, window in zip(cards, windows, strict=True):
         title = html_lib.unescape(card.group("title")).strip()
         if is_header(title):
@@ -194,11 +200,12 @@ def parse_provvedimenti(html: str) -> ProvvedimentiParse:
         link = _LINK.search(window)
         if link is None:
             senza_pdf += 1
+            lost.append(title)
             continue
         url = html_lib.unescape(link.group("link"))
         is_detail = url.lower().startswith(_DETAIL_BASE) or "fa-folder-o" in window.lower()
         entries.append(ProvvedimentoEntry(title, url, is_detail, parse_data(title)))
-    return ProvvedimentiParse(entries, ParseCount(len(cards), len(entries), intestazioni, senza_pdf))
+    return ProvvedimentiParse(entries, ParseCount(len(cards), len(entries), intestazioni, senza_pdf), tuple(lost))
 
 
 def parse_provvedimenti_listing(html: str) -> list[ProvvedimentoEntry]:
