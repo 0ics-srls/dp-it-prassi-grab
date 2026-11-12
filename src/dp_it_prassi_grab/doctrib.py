@@ -19,11 +19,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from defusedxml import ElementTree as SafeElementTree
 
+from dp_it_prassi_grab import pdfdl
 from dp_it_prassi_grab.errors import CONFIG_ERROR, TRANSIENT_ERROR, GrabError
 from dp_it_prassi_grab.http import status_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from dp_it_prassi_grab.ade_client import Pacer
 
@@ -259,6 +261,11 @@ class DocTribSession:
         """The detail page of a provvedimento (HTML, ISO-8859-1)."""
         self._ensure()
         return self._send("GET", DETAIL_URL, params={"id": prov_guid}).content.decode("iso-8859-1")
+
+    def download_content(self, content_id: str, target: Path) -> None:
+        """Streams the PDF behind a content id (NOT the id of the provvedimento) to ``target``."""
+        self._ensure()
+        pdfdl.download_pdf(self._client, self._pacer, self._sleep, CONTENT_URL, target, params={"id": content_id}, headers=HEADERS)
 
 
 @dataclass

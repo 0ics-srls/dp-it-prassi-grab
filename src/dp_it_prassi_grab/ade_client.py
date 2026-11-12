@@ -16,22 +16,18 @@ from urllib.parse import urljoin, urlsplit
 
 import httpx
 
-from dp_it_prassi_grab import ade
+from dp_it_prassi_grab import ade, pdfdl
 from dp_it_prassi_grab.errors import CONFIG_ERROR, TRANSIENT_ERROR, GrabError
-from dp_it_prassi_grab.http import status_error
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
     from pathlib import Path
 
 DEFAULT_BASE_URL = "https://www.agenziaentrate.gov.it/portale"
 ENTE = "Agenzia delle Entrate"
 FONTE = "ade-portale"
 PAUSE_SEC = 0.6
-MAX_ATTEMPTS = 3
-BACKOFF_SEC = 5.0
-MIN_PDF_BYTES = 1024
-CHUNK = 64 * 1024
+MIN_PDF_BYTES = pdfdl.MIN_PDF_BYTES
 MESI = ["gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno", "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"]
 TIPOLOGIE = {"circolari": "circolare", "risoluzioni": "risoluzione", "provvedimenti": "provvedimento"}
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -102,29 +98,9 @@ class AdeClient:
         self._base = base_url.rstrip("/")
         self._sleep = sleep
 
-    def _attempts(self) -> Iterator[int]:
-        for attempt in range(MAX_ATTEMPTS):
-            if attempt:
-                self._sleep(BACKOFF_SEC * attempt)
-            self._pacer.wait()
-            yield attempt
-
-    @staticmethod
-    def _check(url: str, response: httpx.Response) -> GrabError | None:
-        """None when the answer is usable; a retryable GrabError for 5xx/429; raises for an answer that retrying cannot fix."""
-        if response.status_code == httpx.codes.FORBIDDEN:
-            msg = f"HTTP 403 from {url}: the portal (Akamai) refused this client; use a browser User-Agent, a lower rate or another egress"
-            raise GrabError(CONFIG_ERROR, msg)
-        if response.status_code == httpx.codes.OK:
-            return None
-        failure = status_error(url, response.status_code)
-        if failure.code == CONFIG_ERROR:
-            raise failure
-        return failure
-
     def _get(self, url: str) -> httpx.Response:
         last: GrabError | None = None
-        for _ in self._attempts():
+        for _ in pdfdl.attempts(self._pacer, self._sleep):
             try:
                 response = self._http.get(url)
             except httpx.TransportError as error:
@@ -132,7 +108,7 @@ class AdeClient:
                 continue
             if response.status_code == httpx.codes.NOT_FOUND:
                 return response
-            last = self._check(url, response)
+            last = pdfdl.check_response(url, response)
             if last is None:
                 return response
         assert last is not None  # the loop ran at least once
@@ -148,44 +124,9 @@ class AdeClient:
         response = self._get(url)
         return None if response.status_code == httpx.codes.NOT_FOUND else response.text
 
-    def _download_once(self, url: str, temp: Path) -> GrabError | None:
-        try:
-            with self._http.stream("GET", url) as response:
-                if response.status_code == httpx.codes.NOT_FOUND:
-                    raise GrabError(CONFIG_ERROR, f"HTTP 404 from {url}")
-                failure = self._check(url, response)
-                if failure is not None:
-                    return failure
-                size = 0
-                with temp.open("wb") as handle:
-                    for block in response.iter_bytes(CHUNK):
-                        handle.write(block)
-                        size += len(block)
-        except httpx.TransportError as error:
-            return GrabError(TRANSIENT_ERROR, f"download of {url} failed: {error}")
-        with temp.open("rb") as handle:
-            magic = handle.read(5)
-        if magic != b"%PDF-":
-            return GrabError(TRANSIENT_ERROR, f"{url} did not answer a PDF (no %PDF- magic): an interstitial page, retry later")
-        if size < MIN_PDF_BYTES:
-            return GrabError(TRANSIENT_ERROR, f"{url} answered a PDF of {size} bytes, below the {MIN_PDF_BYTES} byte sanity limit")
-        return None
-
     def download_pdf(self, url: str, target: Path) -> None:
         """Streams the PDF to ``target`` (atomic rename; nothing is left behind on a failure)."""
-        target.parent.mkdir(parents=True, exist_ok=True)
-        temp = target.with_name(target.name + ".tmp")
-        last: GrabError | None = None
-        try:
-            for _ in self._attempts():
-                last = self._download_once(url, temp)
-                if last is None:
-                    temp.replace(target)
-                    return
-            assert last is not None
-            raise last
-        finally:
-            temp.unlink(missing_ok=True)
+        pdfdl.download_pdf(self._http, self._pacer, self._sleep, url, target)
 
 
 def validate_meta(key: str, meta: dict[str, Any]) -> None:
@@ -204,7 +145,7 @@ def planned(base: Path, entry: dict[str, Any]) -> dict[str, str]:
     return {"key": entry["key"], "path": str(base / safe_name(entry["meta"]["itemId"])), "status": "planned"}
 
 
-def _write_atomic(path: Path, data: bytes) -> None:
+def write_atomic(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + ".tmp")
     try:
@@ -214,8 +155,8 @@ def _write_atomic(path: Path, data: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
-def _write_json(path: Path, value: Any) -> None:
-    _write_atomic(path, json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
+def write_json(path: Path, value: Any) -> None:
+    write_atomic(path, json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -249,7 +190,7 @@ def _stem_and_name(pdf_url: str) -> tuple[str, str]:
     return name.removesuffix(".pdf").removesuffix(".PDF"), name
 
 
-def _valid_pdf(path: Path) -> bool:
+def valid_pdf(path: Path) -> bool:
     try:
         if path.stat().st_size < MIN_PDF_BYTES:
             return False
@@ -287,7 +228,7 @@ class _ItemGrab:
         if self.restricted and stem not in self.wanted:
             return
         target = self.item_dir / name
-        if _valid_pdf(target):
+        if valid_pdf(target):
             self.skipped_existing += 1
         else:
             self.client.download_pdf(link, target)
@@ -296,7 +237,7 @@ class _ItemGrab:
             "kind": "ade", "tipo": TIPOLOGIE[self.meta["tipologia"]], "titolo": candidate.title, "numero": candidate.numero, "data": candidate.data,
             "sourceUrl": link.split("?", 1)[0], "fonte": FONTE, "sourceId": stem, "ente": ENTE,
         }
-        _write_json(self.item_dir / f"{name}.meta.json", sidecar)
+        write_json(self.item_dir / f"{name}.meta.json", sidecar)
         self.coverage["documents"] += 1
 
 
@@ -323,7 +264,7 @@ def grab_ade_item(entry: dict[str, Any], base: Path, client: AdeClient, settings
                 break
             item.take(candidate)
         coverage["dettagli_persi"] = sum(1 for s in coverage["skipped"] if s["reason"] == "dettaglio_senza_pdf")
-    _write_json(item_dir / "_coverage.json", coverage)
+    write_json(item_dir / "_coverage.json", coverage)
     return {
         "key": entry["key"], "path": str(item_dir), "status": "downloaded", "downloaded": item.downloaded, "skipped_existing": item.skipped_existing,
         "documents": coverage["documents"], "senza_pdf": coverage["senza_pdf"], "dettagli_persi": coverage["dettagli_persi"],
